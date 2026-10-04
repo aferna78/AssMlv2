@@ -1,0 +1,6 @@
+{
+  "name": "SLA English Master Coach",
+  "description": "Master Language Coach y Diseñador Lingüístico de Inglés SLA (A1 a C2) con Input Comprensible i+1, Repetición Espaciada y Método Léxico.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,48 @@
+{
+  "userEmail": "AntonioFCM@gmail.com",
+  "displayName": "Antonio",
+  "currentAssimilLessonNum": 8,
+  "assimilProgress": {
+    "currentLessonNumber": 8,
+    "completedLessons": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "listenedLessons": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "masteredActiveLessons": [],
+    "audioSpeed": 0.9,
+    "lastUpdated": 1790677569282
+  },
+  "systemState": {
+    "cefrLevel": "A1",
+    "currentDomain": "Vocabulario",
+    "errorRate": "Baja (<10%)",
+    "targetVocabulary": [
+      "where are you",
+      "in the house",
+      "near the trees",
+      "brother",
+      "polite"
+    ],
+    "learningTrack": "Fluidez Conversacional (UK)",
+    "totalInteractions": 8,
+    "streakDays": 2,
+    "xpPoints": 350,
+    "lastActiveDate": "2026-09-29T10:26:09.282Z"
+  },
+  "lastSynced": 1790677569282
+}
