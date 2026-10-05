@@ -110,6 +110,62 @@ export interface SpeechRecognitionResultState {
 
 export type VoiceStatus = 'idle' | 'requesting_permission' | 'listening' | 'transcribing' | 'error';
 
+// Convierte cualquier audio grabado (webm/mp4) a WAV PCM 16 kHz mono.
+// Gemini no admite webm, pero sí wav.
+async function blobToWavBase64(blob: Blob): Promise<{ base64: string; mimeType: string }> {
+  const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+  const arrayBuffer = await blob.arrayBuffer();
+  const ctx = new Ctx();
+  const decoded: AudioBuffer = await new Promise((resolve, reject) => {
+    ctx.decodeAudioData(arrayBuffer, resolve, reject);
+  });
+  try { ctx.close(); } catch {}
+
+  const targetRate = 16000;
+  const frames = Math.max(1, Math.ceil(decoded.duration * targetRate));
+  const Offline = (window as any).OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+  const offline = new Offline(1, frames, targetRate);
+  const src = offline.createBufferSource();
+  src.buffer = decoded;
+  src.connect(offline.destination);
+  src.start(0);
+  const rendered: AudioBuffer = await offline.startRendering();
+  const samples = rendered.getChannelData(0);
+
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeStr = (o: number, str: string) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(o + i, str.charCodeAt(i));
+  };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, targetRate, true);
+  view.setUint32(28, targetRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const v = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+  }
+
+  const wavBlob = new Blob([buffer], { type: 'audio/wav' });
+  const dataUrl: string = await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onloadend = () => resolve(r.result as string);
+    r.onerror = reject;
+    r.readAsDataURL(wavBlob);
+  });
+  return { base64: dataUrl, mimeType: 'audio/wav' };
+}
+
 export class VoiceDictationService {
   private activeRecognition: any = null;
   private activeMediaRecorder: MediaRecorder | null = null;
@@ -299,14 +355,22 @@ export class VoiceDictationService {
 
         try {
           const audioBlob = new Blob(this.audioChunks, { type: mimeType });
-          const base64Audio = await this.blobToBase64(audioBlob);
+          let base64Audio: string;
+          let sendMime = mimeType;
+          try {
+            const wav = await blobToWavBase64(audioBlob);
+            base64Audio = wav.base64;
+            sendMime = wav.mimeType;
+          } catch {
+            base64Audio = await this.blobToBase64(audioBlob);
+          }
 
           const res = await fetch('/api/coach/transcribe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               audioBase64: base64Audio,
-              mimeType,
+              mimeType: sendMime,
             }),
           });
 
@@ -316,6 +380,8 @@ export class VoiceDictationService {
               onResult({ transcript: data.text, isFinal: true });
             } else if (data.error === 'no-key') {
               onError('El servidor no tiene configurada la clave de Gemini (GEMINI_API_KEY).');
+            } else if (data.error === 'model-failed') {
+              onError('Gemini no pudo transcribir el audio' + (data.detail ? ' (' + String(data.detail).slice(0, 160) + ')' : '') + '.');
             } else {
               onError('No se entendió el audio. Habla más cerca del micrófono y vuelve a intentarlo.');
             }
