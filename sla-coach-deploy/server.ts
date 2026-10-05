@@ -752,11 +752,11 @@ app.post('/api/coach/transcribe', async (req, res) => {
     }
 
     if (!ai) {
-      return res.json({ text: '' });
+      return res.json({ text: '', error: 'no-key' });
     }
 
     const cleanBase64 = audioBase64.replace(/^data:[^;]+;base64,/, '');
-    const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash'];
+    const modelsToTry = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-3.8-flash'];
     let text = '';
 
     for (const model of modelsToTry) {
