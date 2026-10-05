@@ -758,6 +758,7 @@ app.post('/api/coach/transcribe', async (req, res) => {
     const cleanBase64 = audioBase64.replace(/^data:[^;]+;base64,/, '');
     const modelsToTry = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-3.8-flash'];
     let text = '';
+    let lastErr = '';
 
     for (const model of modelsToTry) {
       try {
@@ -784,14 +785,19 @@ app.post('/api/coach/transcribe', async (req, res) => {
           text = response.text.trim();
           break;
         }
-      } catch {
-        // Try fallback model
+      } catch (e: any) {
+        lastErr = String(e?.message || e);
+        console.error('[transcribe] model', model, 'failed:', lastErr);
       }
     }
 
+    if (!text) {
+      return res.json({ text: '', error: 'model-failed', detail: lastErr });
+    }
     res.json({ text });
-  } catch {
-    res.json({ text: '' });
+  } catch (e: any) {
+    console.error('[transcribe] error:', e);
+    res.json({ text: '', error: 'model-failed', detail: String(e?.message || e) });
   }
 });
 
