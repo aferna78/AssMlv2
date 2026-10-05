@@ -104,6 +104,9 @@ export const ExercisePhoneticTester: React.FC<ExercisePhoneticTesterProps> = ({
     setIsListening(false);
     if (liveTranscript.trim()) {
       handleFinishEvaluation(liveTranscript);
+    } else if (voiceDictation.usesRecorder) {
+      // La transcripción llega del servidor unos segundos después de parar
+      setLiveTranscript('Transcribiendo tu voz…');
     } else {
       setErrorMsg('No se detectó audio. Pulsa el micrófono y di la frase en voz alta.');
     }
