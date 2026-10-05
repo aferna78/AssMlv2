@@ -116,6 +116,17 @@ export class VoiceDictationService {
   private activeStream: MediaStream | null = null;
   private audioChunks: Blob[] = [];
   public isListening: boolean = false;
+  public usesRecorder: boolean = false;
+
+  // En móviles/tablets (también con "sitio para ordenadores") el reconocimiento nativo
+  // falla en silencio: usamos grabación + transcripción en el servidor.
+  private preferRecorder(): boolean {
+    if (typeof navigator === 'undefined') return false;
+    const touch = (navigator.maxTouchPoints || 0) > 1;
+    const mobileUA = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    const hasRecorder = Boolean(window.MediaRecorder && navigator.mediaDevices?.getUserMedia);
+    return hasRecorder && (touch || mobileUA);
+  }
 
   public isSupported(): boolean {
     if (typeof window === 'undefined') return false;
@@ -165,8 +176,17 @@ export class VoiceDictationService {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
+    this.usesRecorder = false;
+    if (this.preferRecorder() && this.activeStream) {
+      this.usesRecorder = true;
+      this.startMediaRecorderFallback(onResult, onError, onEnd, onStatusChange);
+      return;
+    }
+
     // 2. Try native Web Speech Recognition first for instant streaming
     if (SpeechRecognition) {
+      // Liberar el micrófono: dos usos simultáneos bloquean el reconocimiento
+      this.cleanupStream();
       try {
         const recognition = new SpeechRecognition();
         recognition.continuous = true; // Keep listening continuously until stopped
@@ -205,8 +225,14 @@ export class VoiceDictationService {
             onEnd();
           } else if (event.error !== 'aborted') {
             // Silently try MediaRecorder fallback
-            if (this.activeStream && window.MediaRecorder && !this.activeMediaRecorder) {
-              this.startMediaRecorderFallback(onResult, onError, onEnd, onStatusChange);
+            if (window.MediaRecorder && !this.activeMediaRecorder) {
+              try {
+                this.activeStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                this.usesRecorder = true;
+                this.startMediaRecorderFallback(onResult, onError, onEnd, onStatusChange);
+              } catch {
+                onError('No se pudo acceder al micrófono del dispositivo.');
+              }
             }
           }
         };
@@ -288,10 +314,16 @@ export class VoiceDictationService {
             const data = await res.json();
             if (data.text) {
               onResult({ transcript: data.text, isFinal: true });
+            } else if (data.error === 'no-key') {
+              onError('El servidor no tiene configurada la clave de Gemini (GEMINI_API_KEY).');
+            } else {
+              onError('No se entendió el audio. Habla más cerca del micrófono y vuelve a intentarlo.');
             }
+          } else {
+            onError('Error al transcribir la voz. Inténtalo de nuevo.');
           }
         } catch {
-          // Graceful end
+          onError('Sin conexión con el servidor. Inténtalo de nuevo.');
         } finally {
           this.cleanupStream();
           this.isListening = false;
