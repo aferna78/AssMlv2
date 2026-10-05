@@ -891,6 +891,68 @@ if (!fs.existsSync(PROFILES_DIR)) {
   } catch {}
 }
 
+// ==========================================
+// Persistencia externa opcional (Upstash Redis, API REST)
+// Si UPSTASH_REDIS_REST_URL y UPSTASH_REDIS_REST_TOKEN existen, cada guardado
+// se copia a Redis y al arrancar se recupera. Si no, solo se usan archivos.
+// ==========================================
+const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL;
+const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+const redisEnabled = Boolean(REDIS_URL && REDIS_TOKEN);
+const REDIS_REGISTRY_KEY = 'sla:registry';
+const REDIS_PROFILE_PREFIX = 'sla:profile:';
+
+async function redisCmd(cmd: any[]): Promise<any> {
+  const r = await fetch(REDIS_URL as string, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(cmd),
+  });
+  const j: any = await r.json();
+  if (j.error) throw new Error(j.error);
+  return j.result;
+}
+
+function redisPush(key: string, value: string) {
+  if (!redisEnabled) return;
+  redisCmd(['SET', key, value]).catch((e) => console.error('[Redis] SET failed:', key, e?.message || e));
+}
+
+async function hydrateFromRedis() {
+  if (!redisEnabled) return;
+  try {
+    const reg = await redisCmd(['GET', REDIS_REGISTRY_KEY]);
+    if (reg) fs.writeFileSync(REGISTRY_FILE, reg, 'utf-8');
+    const keys: string[] = (await redisCmd(['KEYS', REDIS_PROFILE_PREFIX + '*'])) || [];
+    for (const k of keys) {
+      const v = await redisCmd(['GET', k]);
+      if (v) fs.writeFileSync(path.join(PROFILES_DIR, k.slice(REDIS_PROFILE_PREFIX.length) + '.json'), v, 'utf-8');
+    }
+    console.log(`[Redis] Recuperados ${keys.length} perfiles`);
+  } catch (e: any) {
+    console.error('[Redis] No se pudo recuperar el progreso:', e?.message || e);
+  }
+}
+
+// Primera vez: sube lo que haya en archivos si Redis aún no tiene nada
+async function seedRedisIfEmpty() {
+  if (!redisEnabled) return;
+  try {
+    for (const f of fs.readdirSync(PROFILES_DIR)) {
+      if (!f.endsWith('.json')) continue;
+      const key = REDIS_PROFILE_PREFIX + f.replace(/\.json$/, '');
+      const exists = await redisCmd(['EXISTS', key]);
+      if (!exists) await redisCmd(['SET', key, fs.readFileSync(path.join(PROFILES_DIR, f), 'utf-8')]);
+    }
+    const existsReg = await redisCmd(['EXISTS', REDIS_REGISTRY_KEY]);
+    if (!existsReg && fs.existsSync(REGISTRY_FILE)) {
+      await redisCmd(['SET', REDIS_REGISTRY_KEY, fs.readFileSync(REGISTRY_FILE, 'utf-8')]);
+    }
+  } catch (e: any) {
+    console.error('[Redis] seed failed:', e?.message || e);
+  }
+}
+
 const DEFAULT_SERVER_PROGRESS = {
   userEmail: 'AntonioFCM@gmail.com',
   displayName: 'Antonio',
@@ -998,7 +1060,9 @@ function updateRegistryProfile(email: string, progressData: any) {
       list.push(item);
     }
 
-    fs.writeFileSync(REGISTRY_FILE, JSON.stringify(list, null, 2), 'utf-8');
+    const regJson = JSON.stringify(list, null, 2);
+    fs.writeFileSync(REGISTRY_FILE, regJson, 'utf-8');
+    redisPush(REDIS_REGISTRY_KEY, regJson);
   } catch (err) {
     console.error('[Registry] Error updating registry:', err);
   }
@@ -1058,7 +1122,9 @@ function writeProfileProgress(email: string, data: any) {
   const targetEmail = (email || 'AntonioFCM@gmail.com').trim();
   const filePath = getProfileFilePath(targetEmail);
   try {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+    const profileJson = JSON.stringify(data, null, 2);
+    fs.writeFileSync(filePath, profileJson, 'utf-8');
+    redisPush(REDIS_PROFILE_PREFIX + sanitizeEmailForFilename(targetEmail), profileJson);
     updateRegistryProfile(targetEmail, data);
     // Keep legacy single-file in sync
     try {
@@ -1070,6 +1136,9 @@ function writeProfileProgress(email: string, data: any) {
     return false;
   }
 }
+
+// Recuperar progreso guardado fuera del disco (si está configurado)
+await hydrateFromRedis();
 
 // Seed initial profile on startup
 const defaultEmail = 'AntonioFCM@gmail.com';
@@ -1087,6 +1156,8 @@ if (!fs.existsSync(defaultProfileFile)) {
     writeProfileProgress(defaultEmail, DEFAULT_SERVER_PROGRESS);
   }
 }
+
+await seedRedisIfEmpty();
 
 // GET user progress (Assigned to specific user profile from desktop & mobile)
 app.get('/api/user-progress', (req, res) => {
